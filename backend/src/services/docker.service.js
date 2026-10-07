@@ -119,6 +119,8 @@ const findAvailablePort = async () => {
 const sanitizeForImageName = (str) =>
   str.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').slice(0, 50);
 
+const tar = require('tar-fs');
+
 /**
  * Build a Docker image from the given directory.
  *
@@ -134,8 +136,10 @@ const buildImage = async ({ contextPath, imageTag, onLog }) => {
 
   onLog(`[INFO] Starting Docker image build: ${imageTag}`);
 
+  const tarStream = tar.pack(contextPath);
+
   const stream = await docker.buildImage(
-    { context: contextPath, src: ['.'] },
+    tarStream,
     { t: imageTag, rm: true, forcerm: true }
   );
 
