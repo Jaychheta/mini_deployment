@@ -16,6 +16,7 @@
 
 const pool   = require('../db/pool');
 const logger = require('../utils/logger.util');
+const { redactSecrets } = require('../utils/crypto.util');
 
 // ─── Service Methods ──────────────────────────────────────────────────────────
 
@@ -146,6 +147,7 @@ const create = async ({ projectId, commitHash }) => {
  * @returns {Promise<void>}
  */
 const updateDeployment = async (deploymentId, { status, containerId, containerPort, logs }) => {
+  const sanitizedLogs = logs ? redactSecrets(logs) : null;
   await pool.query(`
     UPDATE deployments
     SET status = $1,
@@ -154,7 +156,7 @@ const updateDeployment = async (deploymentId, { status, containerId, containerPo
         logs = COALESCE($4, logs),
         completed_at = NOW()
     WHERE id = $5
-  `, [status, containerId || null, containerPort || null, logs || null, deploymentId]);
+  `, [status, containerId || null, containerPort || null, sanitizedLogs, deploymentId]);
 };
 
 /**
@@ -166,11 +168,12 @@ const updateDeployment = async (deploymentId, { status, containerId, containerPo
  */
 const appendDeploymentLogs = async (deploymentId, logs) => {
   try {
+    const sanitized = logs ? redactSecrets(logs) : '';
     await pool.query(`
       UPDATE deployments
       SET logs = COALESCE(logs, '') || $1
       WHERE id = $2
-    `, [logs, deploymentId]);
+    `, [sanitized, deploymentId]);
   } catch (err) {
     logger.warn(`[DEPLOYMENT] Failed to append logs for ${deploymentId}: ${err.message}`);
   }

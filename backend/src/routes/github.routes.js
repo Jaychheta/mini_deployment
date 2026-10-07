@@ -16,24 +16,18 @@ const {
   connectViaToken,
   callback,
   status,
-  getRepos,
+  repos,
   disconnect,
 } = require('../controllers/github.controller');
-const { requireAuth } = require('../middleware/auth.middleware');
+const { requireAuth }   = require('../middleware/auth.middleware');
+const { oauthLimiter }  = require('../middleware/rateLimit.middleware');
 
-// Protected connect (via Authorization header — for API clients)
-router.get('/connect',          requireAuth, connect);
+router.get('/connect',          oauthLimiter, requireAuth, connect);
+router.get('/connect-redirect', oauthLimiter, connectViaToken);
+router.get('/callback',         oauthLimiter, callback);
 
-// Public connect-redirect (reads token from query param — for browser redirects)
-// Token is verified inside connectViaToken before use
-router.get('/connect-redirect', connectViaToken);
-
-// Public callback — GitHub redirects here with code + state (JWT)
-router.get('/callback',         callback);
-
-// Protected: require JWT authentication
 router.get('/status',           requireAuth, status);
-router.get('/repos',            requireAuth, getRepos);
+router.get('/repos',            requireAuth, repos);
 router.post('/disconnect',      requireAuth, disconnect);
 
 module.exports = router;

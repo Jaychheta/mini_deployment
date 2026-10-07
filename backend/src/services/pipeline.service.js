@@ -229,6 +229,17 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
     }
     log.addLine(`[INFO] GitHub token retrieved (backend-only, not logged).`);
 
+    // ── Step 4b: Verify repository access via GitHub API ─────────────────────
+    log.addLine(`[INFO] Verifying repository access on GitHub...`);
+    const hasAccess = await githubService.verifyRepoAccess(accessToken, repositoryUrl);
+    if (!hasAccess) {
+      await failDeployment(
+        'Unable to access GitHub repository. Access may have been revoked or repository deleted.'
+      );
+      return;
+    }
+    log.addLine(`[INFO] Repository access verified.`);
+
     // ── Step 5: Get latest commit SHA ─────────────────────────────────────────
     log.addLine(`[INFO] Fetching latest commit SHA from GitHub...`);
     let commitSha;

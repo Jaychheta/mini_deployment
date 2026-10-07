@@ -69,7 +69,14 @@ const CREATE_TABLES_SQL = `
     recorded_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
   );
 
-  CREATE INDEX IF NOT EXISTS idx_metrics_deployment_id ON resource_metrics(deployment_id);
+  CREATE TABLE IF NOT EXISTS oauth_states (
+    state       VARCHAR(100) PRIMARY KEY,
+    user_id     UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at  TIMESTAMPTZ  NOT NULL,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_oauth_states_user_id ON oauth_states(user_id);
 `;
 
 // ─── Seed the default ADMIN account ──────────────────────────────────────────

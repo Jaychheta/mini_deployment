@@ -1,20 +1,35 @@
 /**
- * logger.util.js — Simple console logger utility.
+ * logger.util.js — Sanitized console logger utility.
  *
- * Wraps console.log/warn/error with timestamps and log-level prefixes.
- * Phase 5+ can swap this for Winston or Pino for structured JSON logging
- * that integrates with Docker log drivers.
+ * Automatically redacts GitHub access tokens, Bearer tokens, embedded URLs with secrets,
+ * JWTs, and sensitive credentials from all console logs and output streams.
  */
+
+const { redactSecrets } = require('./crypto.util');
 
 const timestamp = () => new Date().toISOString();
 
+const sanitizeArgs = (args) => {
+  return args.map((arg) => {
+    if (typeof arg === 'string') {
+      return redactSecrets(arg);
+    }
+    if (arg instanceof Error) {
+      arg.message = redactSecrets(arg.message);
+      if (arg.stack) arg.stack = redactSecrets(arg.stack);
+      return arg;
+    }
+    return arg;
+  });
+};
+
 const logger = {
-  info:  (...args) => console.log(`[${timestamp()}] [INFO] `, ...args),
-  warn:  (...args) => console.warn(`[${timestamp()}] [WARN] `, ...args),
-  error: (...args) => console.error(`[${timestamp()}] [ERROR]`, ...args),
+  info:  (...args) => console.log(`[${timestamp()}] [INFO] `, ...sanitizeArgs(args)),
+  warn:  (...args) => console.warn(`[${timestamp()}] [WARN] `, ...sanitizeArgs(args)),
+  error: (...args) => console.error(`[${timestamp()}] [ERROR]`, ...sanitizeArgs(args)),
   debug: (...args) => {
     if (process.env.NODE_ENV !== 'production') {
-      console.log(`[${timestamp()}] [DEBUG]`, ...args);
+      console.log(`[${timestamp()}] [DEBUG]`, ...sanitizeArgs(args));
     }
   },
 };
