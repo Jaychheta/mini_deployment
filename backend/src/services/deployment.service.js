@@ -122,14 +122,14 @@ const findById = async (id, userId) => {
  * @param {{ projectId, commitHash }} data
  * @returns {Promise<Object>}
  */
-const create = async ({ projectId, commitHash }) => {
+const create = async ({ projectId, commitHash, source = 'MANUAL' }) => {
   const result = await pool.query(`
-    INSERT INTO deployments (project_id, commit_hash, status)
-    VALUES ($1, $2, 'BUILDING')
+    INSERT INTO deployments (project_id, commit_hash, status, deployment_source)
+    VALUES ($1, $2, 'BUILDING', $3)
     RETURNING id, project_id, commit_hash, status,
-              container_id, container_port, logs,
+              container_id, container_port, logs, deployment_source,
               created_at, completed_at
-  `, [projectId, commitHash || null]);
+  `, [projectId, commitHash || null, source]);
 
   return formatDeployment(result.rows[0]);
 };
@@ -220,15 +220,16 @@ const findPreviousLiveDeployment = async (projectId, excludeDeploymentId) => {
 
 /** Convert snake_case DB row to camelCase JS object. */
 const formatDeployment = (row) => ({
-  id:            row.id,
-  projectId:     row.project_id,
-  commitHash:    row.commit_hash,
-  status:        row.status,
-  containerId:   row.container_id,
-  containerPort: row.container_port,
-  logs:          row.logs,
-  createdAt:     row.created_at,
-  completedAt:   row.completed_at,
+  id:               row.id,
+  projectId:        row.project_id,
+  commitHash:       row.commit_hash,
+  status:           row.status,
+  containerId:      row.container_id,
+  containerPort:    row.container_port,
+  logs:             row.logs,
+  deploymentSource: row.deployment_source || 'MANUAL',
+  createdAt:        row.created_at,
+  completedAt:      row.completed_at,
 });
 
 module.exports = {

@@ -1,5 +1,5 @@
 /**
- * DeploymentsPage.jsx — User's deployments list.
+ * DeploymentsPage.jsx — User's deployments history list with Source indicator.
  * Route: /deployments
  */
 
@@ -20,6 +20,21 @@ export default function DeploymentsPage() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  const formatSourceBadge = (src) => {
+    if (src === 'WEBHOOK') {
+      return (
+        <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: 99, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+          ⚡ GitHub Push
+        </span>
+      );
+    }
+    return (
+      <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: 99, background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb' }}>
+        👤 Manual
+      </span>
+    );
+  };
 
   return (
     <div>
@@ -46,7 +61,7 @@ export default function DeploymentsPage() {
                 <tr>
                   <th>ID</th>
                   <th>Commit</th>
-                  <th>Branch</th>
+                  <th>Source</th>
                   <th>Status</th>
                   <th>Created</th>
                   <th></th>
@@ -57,14 +72,13 @@ export default function DeploymentsPage() {
                   <tr key={d.id}>
                     <td className="td-mono td-muted">#{d.id.slice(0, 8)}</td>
                     <td>
-                      <span className="td-mono">{d.commitHash}</span>
-                      <div className="td-muted text-small">{d.commitMessage}</div>
+                      <span className="td-mono">{d.commitHash ? d.commitHash.slice(0, 7) : '—'}</span>
                     </td>
-                    <td className="td-mono td-muted">{d.branch}</td>
+                    <td>{formatSourceBadge(d.deploymentSource)}</td>
                     <td><StatusBadge status={d.status} /></td>
                     <td className="td-muted">
-                      {new Date(d.createdAt).toLocaleDateString('en-US', {
-                        month: 'short', day: 'numeric', year: 'numeric',
+                      {new Date(d.createdAt).toLocaleString('en-US', {
+                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                       })}
                     </td>
                     <td>

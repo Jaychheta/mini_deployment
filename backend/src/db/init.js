@@ -1,12 +1,10 @@
 /**
  * init.js — Database initializer.
  *
- * Called once at server startup. Performs two tasks:
+ * Called once at server startup. Performs three tasks:
  *   1. Creates all tables if they don't exist (idempotent).
- *   2. Seeds the default ADMIN account if it doesn't exist.
- *
- * This means you never need to manually run schema.sql in development —
- * starting the server is enough.
+ *   2. Safely applies Phase 5 migration columns (webhook_id, deployment_source, github_delivery_id).
+ *   3. Seeds the default ADMIN account if it doesn't exist.
  */
 
 const pool   = require('./pool');
@@ -14,7 +12,7 @@ const bcrypt = require('bcryptjs');
 
 const SALT_ROUNDS = 10;
 
-// ─── SQL to create all Phase 3 tables ─────────────────────────────────────────
+// ─── SQL to create all tables ─────────────────────────────────────────
 
 const CREATE_TABLES_SQL = `
   CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -40,22 +38,27 @@ const CREATE_TABLES_SQL = `
     repository_url        TEXT         NOT NULL,
     branch                VARCHAR(100) NOT NULL DEFAULT 'main',
     github_repository_id  VARCHAR(50),
+    webhook_id            VARCHAR(100),
+    webhook_active        BOOLEAN      NOT NULL DEFAULT false,
     created_at            TIMESTAMPTZ  NOT NULL DEFAULT NOW()
   );
 
   CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects(user_id);
+  CREATE INDEX IF NOT EXISTS idx_projects_github_repo_id ON projects(github_repository_id);
 
   CREATE TABLE IF NOT EXISTS deployments (
-    id              UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
-    project_id      UUID         NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    commit_hash     VARCHAR(40),
-    status          VARCHAR(10)  NOT NULL DEFAULT 'BUILDING'
-                        CHECK (status IN ('BUILDING', 'LIVE', 'FAILED', 'STOPPED')),
-    container_id    VARCHAR(100),
-    container_port  INTEGER,
-    logs            TEXT,
-    created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    completed_at    TIMESTAMPTZ
+    id                  UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+    project_id          UUID         NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    commit_hash         VARCHAR(40),
+    status              VARCHAR(10)  NOT NULL DEFAULT 'BUILDING'
+                            CHECK (status IN ('BUILDING', 'LIVE', 'FAILED', 'STOPPED')),
+    container_id        VARCHAR(100),
+    container_port      INTEGER,
+    logs                TEXT,
+    deployment_source   VARCHAR(20)  NOT NULL DEFAULT 'MANUAL',
+    github_delivery_id  VARCHAR(100),
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    completed_at        TIMESTAMPTZ
   );
 
   CREATE INDEX IF NOT EXISTS idx_deployments_project_id ON deployments(project_id);
@@ -79,7 +82,35 @@ const CREATE_TABLES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_oauth_states_user_id ON oauth_states(user_id);
 `;
 
-// ─── Seed the default ADMIN account ──────────────────────────────────────────
+// ─── Phase 5 Safe Migrations ─────────────────────────────────────────────────
+
+const runMigrations = async () => {
+  // Safe ALTER TABLE queries to add missing Phase 5 columns if table existed previously
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='projects' AND column_name='webhook_id') THEN
+        ALTER TABLE projects ADD COLUMN webhook_id VARCHAR(100);
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='projects' AND column_name='webhook_active') THEN
+        ALTER TABLE projects ADD COLUMN webhook_active BOOLEAN NOT NULL DEFAULT false;
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deployments' AND column_name='deployment_source') THEN
+        ALTER TABLE deployments ADD COLUMN deployment_source VARCHAR(20) NOT NULL DEFAULT 'MANUAL';
+      END IF;
+
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deployments' AND column_name='github_delivery_id') THEN
+        ALTER TABLE deployments ADD COLUMN github_delivery_id VARCHAR(100);
+      END IF;
+    END $$;
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_deployments_delivery_id ON deployments(github_delivery_id);`);
+};
+
+// ─── Seed default ADMIN account ──────────────────────────────────────────
 
 const ADMIN_EMAIL    = 'admin@minideploy.com';
 const ADMIN_PASSWORD = 'Admin@123';
@@ -92,7 +123,6 @@ const seedAdmin = async () => {
   );
 
   if (existing.rows.length > 0) {
-    // Admin already exists — nothing to do
     return;
   }
 
@@ -110,19 +140,16 @@ const seedAdmin = async () => {
 
 const initDatabase = async () => {
   try {
-    // Verify connection
     await pool.query('SELECT 1');
     console.log('   ✔  PostgreSQL connected (mini_deploy)');
 
-    // Create tables
     await pool.query(CREATE_TABLES_SQL);
+    await runMigrations();
     console.log('   ✔  Database tables ready');
 
-    // Seed admin
     await seedAdmin();
   } catch (err) {
-    console.error('\n❌  Database initialization failed:', err.message);
-    console.error('   Make sure DATABASE_URL is correct and mini_deploy database exists.\n');
+    console.error('   ❌  Database initialization failed:', err.message);
     process.exit(1);
   }
 };
