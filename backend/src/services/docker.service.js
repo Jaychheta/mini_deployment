@@ -131,12 +131,17 @@ const tar = require('tar-fs');
  * @returns {Promise<void>}
  * @throws {Error} If the build fails
  */
-const buildImage = async ({ contextPath, imageTag, onLog }) => {
+const buildImage = async ({ contextPath, workspacePath, imageTag, onLog }) => {
   const docker = getDockerClient();
+  const buildDir = contextPath || workspacePath;
+
+  if (!buildDir) {
+    throw new Error('Build context directory (contextPath or workspacePath) is required.');
+  }
 
   onLog(`[INFO] Starting Docker image build: ${imageTag}`);
 
-  const tarStream = tar.pack(contextPath);
+  const tarStream = tar.pack(buildDir);
 
   const stream = await docker.buildImage(
     tarStream,
