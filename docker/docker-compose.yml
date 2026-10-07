@@ -1,0 +1,76 @@
+# =============================================================================
+# Mini Deploy Platform — Docker Compose
+# =============================================================================
+# Phase 1: Defines the PostgreSQL service only.
+# Future phases will add:
+#   - backend     (Node.js/Express API)
+#   - frontend    (React/Vite, or served via Nginx)
+#   - nginx       (Reverse proxy + dynamic deployment routing)
+#   - app containers (dynamically started per deployment in Phase 3+)
+# =============================================================================
+
+version: "3.9"
+
+services:
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # PostgreSQL Database
+  # Runs PostgreSQL 16 in a container so no local installation is required.
+  # Data is persisted in a named Docker volume (postgres_data).
+  # ──────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: mini-deploy-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres       # Override via .env in production
+      POSTGRES_DB: mini_deploy
+    ports:
+      - "5432:5432"                     # Expose to host so backend can connect
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Phase 2+: Backend service (uncomment when ready)
+  # ──────────────────────────────────────────────────────────────────────────
+  # backend:
+  #   build:
+  #     context: ./backend
+  #     dockerfile: Dockerfile
+  #   container_name: mini-deploy-backend
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3001:3001"
+  #   environment:
+  #     DATABASE_URL: postgres://postgres:postgres@postgres:5432/mini_deploy
+  #     NODE_ENV: production
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Phase 4+: Nginx reverse proxy (uncomment when ready)
+  # ──────────────────────────────────────────────────────────────────────────
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: mini-deploy-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+  #   depends_on:
+  #     - backend
+
+# ─── Named Volumes ────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
