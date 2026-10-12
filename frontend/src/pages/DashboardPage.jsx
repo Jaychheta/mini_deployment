@@ -18,9 +18,9 @@ import Navbar from '../components/Navbar';
 import { useAuth } from '../context/AuthContext';
 import { apiGet, apiPost } from '../api/api';
 
-const BACKEND_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace('/api', '')
-  : 'http://localhost:3001';
+import { getBackendUrl } from '../api/config';
+
+const BACKEND_URL = getBackendUrl();
 
 export default function DashboardPage() {
   const { user } = useAuth();

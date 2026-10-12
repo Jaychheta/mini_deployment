@@ -13,9 +13,9 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 
-const BACKEND_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace('/api', '')
-  : '';
+import { getBackendUrl } from '../api/config';
+
+const BACKEND_URL = getBackendUrl();
 
 export default function LoginPage() {
   const navigate = useNavigate();

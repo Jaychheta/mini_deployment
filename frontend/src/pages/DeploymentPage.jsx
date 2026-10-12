@@ -22,9 +22,9 @@ import RollbackModal from '../components/RollbackModal';
 import { apiGet, apiPost, apiDelete } from '../api/api';
 import { useNavigate } from 'react-router-dom';
 
-const BACKEND_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace('/api', '')
-  : 'http://localhost:3001';
+import { getBackendUrl } from '../api/config';
+
+const BACKEND_URL = getBackendUrl();
 
 const POLL_INTERVAL_MS = 3000;
 

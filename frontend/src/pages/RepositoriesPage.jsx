@@ -13,9 +13,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import { apiGet, apiPost } from '../api/api';
 
-const BACKEND_URL = import.meta.env.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace('/api', '')
-  : 'http://localhost:3001';
+import { getBackendUrl } from '../api/config';
+
+const BACKEND_URL = getBackendUrl();
 
 export default function RepositoriesPage() {
   const navigate = useNavigate();

@@ -19,36 +19,45 @@ const authService = require('../services/auth.service');
 const jwt           = require('jsonwebtoken');
 
 const JWT_SECRET   = process.env.JWT_SECRET   || 'dev-secret-change-in-production';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const DEFAULT_FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+const getFrontendUrl = (req) => {
+  if (req && req.headers && req.headers.host) {
+    const proto = req.headers['x-forwarded-proto'] || (req.secure ? 'https' : 'http');
+    return `${proto}://${req.headers.host}`;
+  }
+  return DEFAULT_FRONTEND_URL;
+};
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
 
-const initiateOAuthRedirect = async (userId, res) => {
+const initiateOAuthRedirect = async (userId, req, res) => {
   try {
     // Generate a short-lived random 64-character OAuth state
     const state = await githubService.createOAuthState(userId);
     const authUrl = githubService.getGithubAuthUrl(state);
     res.redirect(authUrl);
   } catch (err) {
-    res.redirect(`${FRONTEND_URL}/dashboard?error=github_config_missing`);
+    res.redirect(`${getFrontendUrl(req)}/dashboard?error=github_config_missing`);
   }
 };
 
 const connect = async (req, res) => {
-  await initiateOAuthRedirect(req.user.id, res);
+  await initiateOAuthRedirect(req.user.id, req, res);
 };
 
 const connectViaToken = async (req, res) => {
   const { token } = req.query;
+  const frontendUrl = getFrontendUrl(req);
   if (!token) {
-    return res.redirect(`${FRONTEND_URL}/dashboard?error=github_invalid_state`);
+    return res.redirect(`${frontendUrl}/dashboard?error=github_invalid_state`);
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    await initiateOAuthRedirect(decoded.id, res);
+    await initiateOAuthRedirect(decoded.id, req, res);
   } catch {
-    return res.redirect(`${FRONTEND_URL}/dashboard?error=github_invalid_state`);
+    return res.redirect(`${frontendUrl}/dashboard?error=github_invalid_state`);
   }
 };
 
@@ -56,13 +65,14 @@ const connectViaToken = async (req, res) => {
 
 const callback = async (req, res) => {
   const { code, state, error } = req.query;
+  const frontendUrl = getFrontendUrl(req);
 
   if (error) {
-    return res.redirect(`${FRONTEND_URL}/dashboard?error=github_denied`);
+    return res.redirect(`${frontendUrl}/dashboard?error=github_denied`);
   }
 
   if (!code || !state) {
-    return res.redirect(`${FRONTEND_URL}/dashboard?error=github_invalid_callback`);
+    return res.redirect(`${frontendUrl}/dashboard?error=github_invalid_callback`);
   }
 
   try {
@@ -82,7 +92,7 @@ const callback = async (req, res) => {
       // Validate short-lived random OAuth state from PostgreSQL
       const { valid, userId: dbUserId } = await githubService.validateAndConsumeOAuthState(state);
       if (!valid || !dbUserId) {
-        return res.redirect(`${FRONTEND_URL}/dashboard?error=github_invalid_state`);
+        return res.redirect(`${frontendUrl}/dashboard?error=github_invalid_state`);
       }
       userId = dbUserId;
     }
@@ -95,7 +105,7 @@ const callback = async (req, res) => {
 
     if (isLoginFlow) {
       const { token } = await authService.githubAuth(githubUser, accessToken);
-      return res.redirect(`${FRONTEND_URL}/login?token=${token}`);
+      return res.redirect(`${frontendUrl}/login?token=${token}`);
     }
 
     // Save encrypted token to database for normal connection flow
@@ -105,11 +115,11 @@ const callback = async (req, res) => {
       accessToken,
     });
 
-    res.redirect(`${FRONTEND_URL}/repositories`);
+    res.redirect(`${frontendUrl}/repositories`);
   } catch (err) {
     console.error('GitHub OAuth callback error:', err.message);
     const reason = encodeURIComponent(err.message || 'unknown');
-    res.redirect(`${FRONTEND_URL}/dashboard?error=github_oauth_failed&reason=${reason}`);
+    res.redirect(`${frontendUrl}/dashboard?error=github_oauth_failed&reason=${reason}`);
   }
 };
 
