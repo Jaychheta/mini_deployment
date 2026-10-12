@@ -292,6 +292,36 @@ const detectNodeProjectPort = (workspacePath, pkgDir, packageJson, startCmd) => 
   return { port: 3000, isVite: false, source: 'Node.js standard default' };
 };
 
+/**
+ * Automatically configure Vite projects to allow external domains (Vite 6 host blocking protection)
+ */
+const patchViteConfigForAllowedHosts = (workspacePath, onLog = () => {}) => {
+  const viteConfigFiles = [
+    'vite.config.js', 'vite.config.ts', 'vite.config.mjs', 'vite.config.cjs',
+  ];
+  for (const cfg of viteConfigFiles) {
+    const fullPath = findFileInWorkspace(workspacePath, cfg);
+    if (fullPath && fs.existsSync(fullPath)) {
+      try {
+        let content = fs.readFileSync(fullPath, 'utf-8');
+        if (!content.includes('allowedHosts')) {
+          if (/server\s*:\s*\{/i.test(content)) {
+            content = content.replace(/(server\s*:\s*\{)/i, `$1\n    allowedHosts: true,`);
+          } else if (/defineConfig\s*\(\s*\{/i.test(content)) {
+            content = content.replace(/(defineConfig\s*\(\s*\{)/i, `$1\n  server: { allowedHosts: true, host: '0.0.0.0' },`);
+          }
+          fs.writeFileSync(fullPath, content, 'utf-8');
+          onLog(`[INFO] Configured ${cfg} with allowedHosts: true for external proxy domain access.`);
+          return true;
+        }
+      } catch (err) {
+        onLog(`[WARN] Could not patch ${cfg}: ${err.message}`);
+      }
+    }
+  }
+  return false;
+};
+
 // ─── Project type detection ───────────────────────────────────────────────────
 
 const detectAndPrepareProject = async (workspacePath, onLog) => {
@@ -352,6 +382,10 @@ const detectAndPrepareProject = async (workspacePath, onLog) => {
     const portInfo = detectNodeProjectPort(workspacePath, pkgDir, packageJson, startCmd);
     const containerPort = portInfo.port;
     onLog(`[INFO] Detected container port: ${containerPort} (source: ${portInfo.source}).`);
+
+    if (portInfo.isVite) {
+      patchViteConfigForAllowedHosts(workspacePath, onLog);
+    }
 
     await generateNodeDockerfile(workspacePath, workingSubDir, startCmd, containerPort, portInfo.isVite, onLog);
     return { type: 'nodejs', containerPort };
@@ -432,6 +466,7 @@ ${cdInstruction}
 
 ENV HOST=0.0.0.0
 ENV PORT=${containerPort}
+ENV __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.linkpc.net,.nip.io,.sslip.io,dbj.linkpc.net,localhost
 
 RUN if [ -f package.json ]; then npm install; fi
 
