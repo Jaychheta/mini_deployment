@@ -30,7 +30,7 @@ let io = null;
 const initSocketServer = (httpServer) => {
   io = new Server(httpServer, {
     cors: {
-      origin: FRONTEND_URL,
+      origin: (origin, callback) => callback(null, true),
       credentials: true,
     },
   });

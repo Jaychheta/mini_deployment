@@ -38,7 +38,11 @@ const PORT = process.env.PORT || 3001;
 // ─── Middleware ────────────────────────────────────────────────────────────────
 
 app.use(cors({
-  origin:      process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like server-to-server, curl) or any domain from platform/linkpc
+    if (!origin) return callback(null, true);
+    return callback(null, true);
+  },
   credentials: true,
 }));
 

@@ -109,7 +109,7 @@ const generateNginxConfigContent = (hostname, hostPort, htpasswdPath = null) => 
     throw new Error(`Invalid host port for Nginx config: ${hostPort}`);
   }
 
-  // Support multiple alias hostnames (e.g. nip.io, sslip.io, and raw IP subdomain if applicable)
+  // Support multiple alias hostnames (e.g. nip.io, sslip.io, custom domain, and raw IP subdomain if applicable)
   const serverNames = [hostname];
   if (hostname.endsWith('.nip.io')) {
     const rawHost = hostname.replace(/\.nip\.io$/, '');
@@ -118,6 +118,11 @@ const generateNginxConfigContent = (hostname, hostPort, htpasswdPath = null) => 
   } else if (/(\d{1,3}\.){3}\d{1,3}/.test(hostname)) {
     serverNames.push(`${hostname}.nip.io`);
     serverNames.push(`${hostname}.sslip.io`);
+  } else {
+    // Custom domain (e.g. app-123.dbj.linkpc.net) -> also add nip.io alias as resilient fallback
+    const slug = hostname.split('.')[0];
+    const serverIp = process.env.PUBLIC_IP || '13.203.209.65';
+    serverNames.push(`${slug}.${serverIp}.nip.io`);
   }
 
   const uniqueServerNames = [...new Set(serverNames)].join(' ');
