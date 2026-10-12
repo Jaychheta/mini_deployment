@@ -70,8 +70,18 @@ const generateHostname = (name, projectId, baseDomain = process.env.DEPLOYMENT_D
     deploymentSlug = `${slug.substring(0, 20)}-${shortId}`;
   }
 
+  let resolvedBaseDomain = (baseDomain || 'localhost').trim();
+
+  // CRITICAL FIX: If baseDomain is an IPv4 address (e.g., 13.203.209.65), raw subdomains
+  // (like t4-df61ae.13.203.209.65) cannot resolve in public DNS.
+  // Using .nip.io allows wildcard DNS resolution from any browser anywhere in the world!
+  const isIpv4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(resolvedBaseDomain);
+  if (isIpv4) {
+    resolvedBaseDomain = `${resolvedBaseDomain}.nip.io`;
+  }
+
   const protocol = process.env.PUBLIC_PROTOCOL || 'http';
-  const hostname = `${deploymentSlug}.${baseDomain}`;
+  const hostname = `${deploymentSlug}.${resolvedBaseDomain}`;
   const deploymentUrl = `${protocol}://${hostname}`;
 
   return {
