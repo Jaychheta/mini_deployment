@@ -186,13 +186,13 @@ const validateNginxConfig = async (serverBlockContent, projectSlug = 'test') => 
   const validationErrorLog   = path.join(tempDir, `validate-${testId}-err.log`);
   const validationAccessLog  = path.join(tempDir, `validate-${testId}-acc.log`);
 
-  // Replace privileged ports (e.g. 80, 443) with an unprivileged port (e.g. 18080) for syntax check
+  // Replace all listen directives with a single unprivileged listen port to validate syntax without duplicate listen or privilege errors
   const testPort = 18080;
   let safeValidationBlock = serverBlockContent
-    .replace(/listen\s+\[?::\]?:\d+(?:\s+ssl)?;/gi, `listen ${testPort};`)
-    .replace(/listen\s+\d+(?:\s+ssl)?;/gi, `listen ${testPort};`)
+    .replace(/listen\s+[^;]+;/gi, '')
     .replace(/ssl_certificate.*?;/gi, '')
-    .replace(/ssl_certificate_key.*?;/gi, '');
+    .replace(/ssl_certificate_key.*?;/gi, '')
+    .replace(/server\s*\{/i, `server {\n        listen ${testPort};`);
 
   const wrappedValidationConfig = `# Isolated syntax validation wrapper
 pid ${validationPidFile.replace(/\\/g, '/')};
