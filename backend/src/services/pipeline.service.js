@@ -336,7 +336,7 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId, options = 
     await new Promise((r) => setTimeout(r, 3000));
 
     // ── Step 14: Container Health Check ───────────────────────────────────────
-    const healthy = await performHealthCheck(hostPort, log.addLine);
+    let healthy = await performHealthCheck(hostPort, log.addLine);
 
     if (!healthy) {
       const containerLogs = await dockerService.getContainerLogs(containerId, 100);
@@ -346,12 +346,49 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId, options = 
       }
 
       const stillRunning = await dockerService.isContainerRunning(containerId);
-      if (!stillRunning) {
-        log.addLine(`[ERROR] Container exited unexpectedly.`);
+
+      // Auto-recovery: If container is still alive and logs disclose the actual listening port
+      if (stillRunning && containerLogs.trim()) {
+        const portInLogsMatch =
+          containerLogs.match(/https?:\/\/(?:localhost|127\.0\.0\.1|172\.\d+\.\d+\.\d+|0\.0\.0\.0):(\d+)/i) ||
+          containerLogs.match(/(?:listening|running|ready|started)\s+(?:on|at)\s+(?:port\s+)?(\d+)/i);
+
+        if (portInLogsMatch) {
+          const detectedActualPort = parseInt(portInLogsMatch[1], 10);
+          if (detectedActualPort && detectedActualPort !== containerPort) {
+            log.addLine(`[WARN] Application is active and listening on port ${detectedActualPort} (configured container port was ${containerPort}).`);
+            log.addLine(`[INFO] Auto-recovering: Re-binding container with container port ${detectedActualPort}...`);
+            try {
+              await dockerService.stopAndRemoveContainer(containerId);
+              const retryResult = await dockerService.startContainer({
+                imageTag,
+                containerName,
+                hostPort,
+                containerPort: detectedActualPort,
+                onLog: log.addLine,
+              });
+              containerId = retryResult.containerId;
+              containerPort = detectedActualPort;
+              log.addLine(`[INFO] Re-running health check on http://localhost:${hostPort}...`);
+              const retryHealthy = await performHealthCheck(hostPort, log.addLine);
+              if (retryHealthy) {
+                healthy = true;
+                log.addLine(`[INFO] Container health check succeeded on recovered port ${detectedActualPort}!`);
+              }
+            } catch (rebindErr) {
+              log.addLine(`[WARN] Auto-recovery rebind failed: ${rebindErr.message}`);
+            }
+          }
+        }
       }
 
-      await failDeployment('Health check failed — application did not become reachable.');
-      return;
+      if (!healthy) {
+        if (!stillRunning) {
+          log.addLine(`[ERROR] Container exited unexpectedly.`);
+        }
+        await failDeployment('Health check failed — application did not become reachable.');
+        return;
+      }
     }
 
     // ── Step 15: Phase 6 — Nginx Reverse Proxy Configuration & Validation ──────

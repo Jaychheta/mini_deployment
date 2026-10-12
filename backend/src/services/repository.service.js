@@ -194,6 +194,104 @@ const findFileByExtension = (workspacePath, ext) => {
   return search(workspacePath);
 };
 
+/**
+ * Detect port for a Node.js project by inspecting config files, package scripts, and .env files.
+ *
+ * @param {string} workspacePath - Root of the workspace
+ * @param {string} pkgDir - Directory containing package.json
+ * @param {Object} packageJson - Parsed package.json
+ * @param {string} startCmd - Start command selected for running the app
+ * @returns {{ port: number, isVite: boolean, source: string }}
+ */
+const detectNodeProjectPort = (workspacePath, pkgDir, packageJson, startCmd) => {
+  const scripts = packageJson.scripts || {};
+  const isVite = !!(
+    packageJson.devDependencies?.vite ||
+    packageJson.dependencies?.vite ||
+    Object.values(scripts).some((s) => typeof s === 'string' && s.includes('vite'))
+  );
+  const isNext = !!(
+    packageJson.dependencies?.next ||
+    packageJson.devDependencies?.next
+  );
+  const isAstro = !!(
+    packageJson.dependencies?.astro ||
+    packageJson.devDependencies?.astro
+  );
+  const isNuxt = !!(
+    packageJson.dependencies?.nuxt ||
+    packageJson.devDependencies?.nuxt
+  );
+
+  // 1. Inspect Vite configuration files
+  const viteConfigFiles = [
+    'vite.config.js', 'vite.config.ts', 'vite.config.mjs', 'vite.config.cjs',
+    'vitest.config.js', 'vitest.config.ts'
+  ];
+  for (const cfg of viteConfigFiles) {
+    const candidates = [path.join(pkgDir, cfg), path.join(workspacePath, cfg)];
+    for (const targetPath of candidates) {
+      if (fs.existsSync(targetPath)) {
+        try {
+          const content = fs.readFileSync(targetPath, 'utf-8');
+          // Match server: { ... port: 3000 ... } or port: 3000
+          const serverPortMatch = content.match(/server\s*:\s*\{[^}]*?port\s*:\s*(\d+)/s);
+          if (serverPortMatch) {
+            return { port: parseInt(serverPortMatch[1], 10), isVite, source: `${cfg} (server.port)` };
+          }
+          const portMatch = content.match(/port\s*:\s*(\d+)/);
+          if (portMatch) {
+            return { port: parseInt(portMatch[1], 10), isVite, source: `${cfg} (port)` };
+          }
+        } catch {}
+      }
+    }
+  }
+
+  // 2. Check scripts for explicit port flags (--port 3000, -p 3000, PORT=3000)
+  const scriptCommands = [startCmd, scripts.start, scripts.dev].filter(Boolean);
+  for (const cmd of scriptCommands) {
+    const portFlagMatch = cmd.match(/(?:--port|-p)\s+([0-9]+)/) || cmd.match(/PORT=([0-9]+)/);
+    if (portFlagMatch) {
+      return { port: parseInt(portFlagMatch[1], 10), isVite, source: 'package.json script flag' };
+    }
+  }
+
+  // 3. Check .env files in pkgDir and workspace root
+  const envFiles = ['.env', '.env.local', '.env.production', '.env.development'];
+  for (const envFile of envFiles) {
+    for (const dir of [pkgDir, workspacePath]) {
+      const p = path.join(dir, envFile);
+      if (fs.existsSync(p)) {
+        try {
+          const content = fs.readFileSync(p, 'utf-8');
+          const m = content.match(/^\s*PORT\s*=\s*(\d+)/m);
+          if (m) {
+            return { port: parseInt(m[1], 10), isVite, source: `${envFile} (PORT)` };
+          }
+        } catch {}
+      }
+    }
+  }
+
+  // 4. Framework defaults
+  if (isVite) {
+    return { port: 5173, isVite: true, source: 'Vite default' };
+  }
+  if (isNext) {
+    return { port: 3000, isVite: false, source: 'Next.js default' };
+  }
+  if (isAstro) {
+    return { port: 4321, isVite: false, source: 'Astro default' };
+  }
+  if (isNuxt) {
+    return { port: 3000, isVite: false, source: 'Nuxt default' };
+  }
+
+  // 5. Generic Node.js / Express default
+  return { port: 3000, isVite: false, source: 'Node.js standard default' };
+};
+
 // ─── Project type detection ───────────────────────────────────────────────────
 
 const detectAndPrepareProject = async (workspacePath, onLog) => {
@@ -251,9 +349,11 @@ const detectAndPrepareProject = async (workspacePath, onLog) => {
     }
 
     const workingSubDir = relPkgDir && relPkgDir !== '.' ? relPkgDir : '.';
-    await generateNodeDockerfile(workspacePath, workingSubDir, startCmd, onLog);
-    const isVite = packageJson.devDependencies?.vite || packageJson.dependencies?.vite || startCmd.includes('dev');
-    const containerPort = isVite ? 5173 : 3000;
+    const portInfo = detectNodeProjectPort(workspacePath, pkgDir, packageJson, startCmd);
+    const containerPort = portInfo.port;
+    onLog(`[INFO] Detected container port: ${containerPort} (source: ${portInfo.source}).`);
+
+    await generateNodeDockerfile(workspacePath, workingSubDir, startCmd, containerPort, portInfo.isVite, onLog);
     return { type: 'nodejs', containerPort };
   }
 
@@ -272,7 +372,7 @@ const detectAndPrepareProject = async (workspacePath, onLog) => {
   if (jsFile) {
     const relJs = path.relative(workspacePath, jsFile);
     onLog(`[INFO] JavaScript file detected (${relJs}).`);
-    await generateNodeDockerfile(workspacePath, '.', `node ${relJs}`, onLog);
+    await generateNodeDockerfile(workspacePath, '.', `node ${relJs}`, 3000, false, onLog);
     return { type: 'nodejs', containerPort: 3000 };
   }
 
@@ -299,7 +399,7 @@ const detectExposedPort = async (dockerfilePath) => {
   return null;
 };
 
-const generateNodeDockerfile = async (workspacePath, workingSubDir, startCmd, onLog) => {
+const generateNodeDockerfile = async (workspacePath, workingSubDir, startCmd, containerPort = 3000, isVite = false, onLog = () => {}) => {
   // Create a .dockerignore to avoid copying stale node_modules or permission locks
   const dockerIgnorePath = path.join(workspacePath, '.dockerignore');
   fs.writeFileSync(dockerIgnorePath, "node_modules\n.git\n.npm\n", 'utf-8');
@@ -308,8 +408,18 @@ const generateNodeDockerfile = async (workspacePath, workingSubDir, startCmd, on
   
   // For npm run dev or vite, ensure host 0.0.0.0 is used so it binds externally in Docker
   let finalCmd = startCmd;
-  if (finalCmd.includes('dev') || finalCmd.includes('vite')) {
-    finalCmd = `${finalCmd} -- --host 0.0.0.0`;
+  if (isVite) {
+    if (!finalCmd.includes('--host') && !finalCmd.includes('-h')) {
+      finalCmd = `${finalCmd} -- --host 0.0.0.0`;
+    }
+    // If start command doesn't explicitly specify a port flag, pass the detected containerPort
+    if (!finalCmd.includes('--port') && !finalCmd.includes('-p')) {
+      finalCmd = `${finalCmd} --port ${containerPort}`;
+    }
+  } else if (finalCmd.includes('dev')) {
+    if (!finalCmd.includes('--host') && !finalCmd.includes('-h')) {
+      finalCmd = `${finalCmd} -- --host 0.0.0.0`;
+    }
   }
   const cmdParts = finalCmd.split(' ').map(c => `"${c}"`).join(', ');
 
@@ -321,10 +431,11 @@ COPY . .
 ${cdInstruction}
 
 ENV HOST=0.0.0.0
-ENV PORT=3000
+ENV PORT=${containerPort}
 
 RUN if [ -f package.json ]; then npm install; fi
 
+EXPOSE ${containerPort}
 EXPOSE 3000
 EXPOSE 5173
 EXPOSE 8080
