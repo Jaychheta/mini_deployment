@@ -19,20 +19,39 @@ const BACKEND_URL = import.meta.env.VITE_API_URL
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, setToken } = useAuth();
+  const [searchParams] = useSearchParams();
 
   const [form,    setForm]    = useState({ email: '', password: '' });
   const [error,   setError]   = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get('token');
+    const token = searchParams.get('token');
+    const githubError = searchParams.get('error');
     if (token) {
+      api.setToken(token);
+      localStorage.setItem('auth_token', token);
       localStorage.setItem('token', token);
-      window.location.href = '/dashboard';
+      if (setToken) setToken(token);
+
+      api.get('/auth/me')
+        .then((res) => {
+          if (res.data?.data?.user) {
+            login(res.data.data.user, token);
+          } else if (res.data?.user) {
+            login(res.data.user, token);
+          }
+          navigate('/dashboard');
+        })
+        .catch((err) => {
+          console.error('Failed to fetch user after GitHub OAuth:', err);
+          navigate('/dashboard');
+        });
+    } else if (githubError) {
+      setError(decodeURIComponent(githubError));
     }
-  }, []);
+  }, [searchParams, login, navigate, setToken]);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });

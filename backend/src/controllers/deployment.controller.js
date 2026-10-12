@@ -14,6 +14,8 @@ const projectService    = require('../services/project.service');
 const pipelineService   = require('../services/pipeline.service');
 const dockerService     = require('../services/docker.service');
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /** GET /api/deployments — returns the authenticated user's deployments with optional filters */
 const getAllDeployments = async (req, res, next) => {
   try {
@@ -29,7 +31,16 @@ const getAllDeployments = async (req, res, next) => {
 /** GET /api/deployments/:id — returns a single deployment (ownership verified) */
 const getDeploymentById = async (req, res, next) => {
   try {
-    const deployment = await deploymentService.findById(req.params.id, req.user.id);
+    const { id } = req.params;
+
+    if (!UUID_REGEX.test(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid deployment ID format. Must be a valid UUID.',
+      });
+    }
+
+    const deployment = await deploymentService.findById(id, req.user.id);
 
     if (!deployment) {
       return res.status(404).json({
@@ -129,6 +140,13 @@ const redeployDeployment = async (req, res, next) => {
     const { id } = req.params;
     const userId = req.user.id;
 
+    if (!UUID_REGEX.test(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid deployment ID format. Must be a valid UUID.',
+      });
+    }
+
     const targetDeployment = await deploymentService.findById(id, userId);
     if (!targetDeployment) {
       return res.status(404).json({
@@ -209,6 +227,13 @@ const rollbackDeployment = async (req, res, next) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
+
+    if (!UUID_REGEX.test(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid deployment ID format. Must be a valid UUID.',
+      });
+    }
 
     const targetDeployment = await deploymentService.findById(id, userId);
     if (!targetDeployment) {
