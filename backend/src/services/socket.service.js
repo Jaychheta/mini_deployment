@@ -98,6 +98,20 @@ const initSocketServer = (httpServer) => {
             logs: redactSecrets(deployment.logs),
           });
         }
+
+        // Emit latest resource metrics if already sampled
+        try {
+          const resourceMonitorService = require('./resourceMonitorService');
+          resourceMonitorService.getLatestMetrics(deploymentId, isAdmin ? undefined : socket.user.id)
+            .then((resData) => {
+              if (resData) {
+                socket.emit('resources:update', resData);
+              }
+            })
+            .catch(() => {});
+        } catch {
+          // ignore if monitor service is loading
+        }
       } catch (err) {
         logger.warn(`[SOCKET] Error joining deployment room: ${err.message}`);
       }
@@ -163,10 +177,44 @@ const emitDeploymentError = (deploymentId, error) => {
   });
 };
 
+/**
+ * Emit real-time container resource statistics to clients in the deployment room.
+ *
+ * @param {string} deploymentId
+ * @param {Object} resourceData
+ */
+const emitResourceUpdate = (deploymentId, resourceData) => {
+  if (!io || !deploymentId || !resourceData) return;
+  io.to(`deployment:${deploymentId}`).emit('resources:update', {
+    deploymentId,
+    ...resourceData,
+    timestamp: new Date().toISOString(),
+  });
+};
+
+/**
+ * Emit resource error event to clients in the deployment room.
+ *
+ * @param {string} deploymentId
+ * @param {string|Error} error
+ */
+const emitResourceError = (deploymentId, error) => {
+  if (!io || !deploymentId) return;
+  const message = typeof error === 'string' ? error : error.message || 'Resource monitoring error';
+  io.to(`deployment:${deploymentId}`).emit('resources:error', {
+    deploymentId,
+    error: message,
+    timestamp: new Date().toISOString(),
+  });
+};
+
 module.exports = {
   initSocketServer,
   emitDeploymentLog,
   emitDeploymentStatus,
   emitDeploymentComplete,
   emitDeploymentError,
+  emitResourceUpdate,
+  emitResourceError,
 };
+

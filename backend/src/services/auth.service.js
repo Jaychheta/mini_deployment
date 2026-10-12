@@ -15,6 +15,8 @@
 const bcrypt = require('bcryptjs');
 const jwt    = require('jsonwebtoken');
 const pool   = require('../db/pool');
+const { v4: uuidv4 } = require('uuid');
+const { encrypt } = require('../utils/crypto.util');
 
 const SALT_ROUNDS = 10;
 const JWT_SECRET  = process.env.JWT_SECRET   || 'dev-secret-change-in-production';
@@ -103,6 +105,73 @@ const login = async ({ email, password }) => {
 };
 
 /**
+ * Authenticate or register a user via GitHub OAuth.
+ * @param {Object} githubUser
+ * @param {string} accessToken
+ */
+const githubAuth = async (githubUser, accessToken) => {
+  if (!githubUser.email) {
+    throw new Error('Your GitHub account does not have a public email address. Please make it public or use email/password login.');
+  }
+
+  const email = githubUser.email.toLowerCase();
+  const encryptedToken = encrypt(accessToken);
+  const strGithubId = String(githubUser.id);
+
+  let user = null;
+
+  // 1. Try to find user by GitHub ID first (best match)
+  const byGithub = await pool.query('SELECT * FROM users WHERE github_id = $1', [strGithubId]);
+  
+  if (byGithub.rows.length > 0) {
+    user = byGithub.rows[0];
+    // Update token and username
+    await pool.query(
+      `UPDATE users SET github_username = $1, github_access_token = $2 WHERE id = $3`,
+      [githubUser.login, encryptedToken, user.id]
+    );
+    user.github_username = githubUser.login;
+  } else {
+    // 2. Fallback to finding by email
+    const byEmail = await pool.query('SELECT * FROM users WHERE LOWER(email) = $1', [email]);
+    
+    if (byEmail.rows.length > 0) {
+      user = byEmail.rows[0];
+      // Unlink github_id from any other user just in case
+      await pool.query(
+        `UPDATE users SET github_id = NULL, github_username = NULL, github_access_token = NULL WHERE github_id = $1`,
+        [strGithubId]
+      );
+      // Link to this user
+      await pool.query(
+        `UPDATE users SET github_id = $1, github_username = $2, github_access_token = $3 WHERE id = $4`,
+        [strGithubId, githubUser.login, encryptedToken, user.id]
+      );
+      user.github_id = strGithubId;
+      user.github_username = githubUser.login;
+    } else {
+      // 3. Create new user
+      // Unlink github_id from any other user just in case
+      await pool.query(
+        `UPDATE users SET github_id = NULL, github_username = NULL, github_access_token = NULL WHERE github_id = $1`,
+        [strGithubId]
+      );
+
+      const passwordHash = await bcrypt.hash(uuidv4(), SALT_ROUNDS);
+      const result = await pool.query(
+        `INSERT INTO users (name, email, password_hash, role, github_id, github_username, github_access_token)
+         VALUES ($1, $2, $3, 'USER', $4, $5, $6)
+         RETURNING *`,
+        [githubUser.name || githubUser.login, email, passwordHash, strGithubId, githubUser.login, encryptedToken]
+      );
+      user = result.rows[0];
+    }
+  }
+
+  return { user: safeUser(user), token: generateToken(user) };
+};
+
+/**
  * Look up a user by ID (safe — no password hash or tokens).
  * @param {string} id
  * @returns {Object|null}
@@ -131,4 +200,4 @@ const findAll = async () => {
   return result.rows.map(safeUser);
 };
 
-module.exports = { signup, login, findById, findAll };
+module.exports = { signup, login, findById, findAll, githubAuth };

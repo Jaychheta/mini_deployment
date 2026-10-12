@@ -9,7 +9,7 @@
 
 const express = require('express');
 const router  = express.Router();
-const { signup, login, logout, me } = require('../controllers/auth.controller');
+const { signup, login, logout, me, githubLogin } = require('../controllers/auth.controller');
 const { requireAuth } = require('../middleware/auth.middleware');
 const { authLimiter } = require('../middleware/rateLimit.middleware');
 
@@ -17,5 +17,6 @@ router.post('/signup',  authLimiter, signup);
 router.post('/login',   authLimiter, login);
 router.post('/logout',  requireAuth, logout);
 router.get('/me',       requireAuth, me);
+router.get('/github',   authLimiter, githubLogin);
 
 module.exports = router;

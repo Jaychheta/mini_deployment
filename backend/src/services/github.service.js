@@ -89,8 +89,9 @@ const getGithubAuthUrl = (state) => {
   const params = new URLSearchParams({
     client_id,
     redirect_uri,
-    scope: 'read:user repo',
+    scope: 'read:user user:email repo',
     state,
+    prompt: 'consent', // Forces GitHub to show the account selection/authorization screen
   });
 
   return `https://github.com/login/oauth/authorize?${params.toString()}`;
@@ -199,7 +200,19 @@ const githubApiGet = (path, token) => {
 
 const getGithubUser = async (token) => {
   const data = await githubApiGet('/user', token);
-  return { id: String(data.id), login: data.login };
+  let email = data.email;
+
+  if (!email) {
+    try {
+      const emails = await githubApiGet('/user/emails', token);
+      const primary = emails.find((e) => e.primary) || emails[0];
+      if (primary) email = primary.email;
+    } catch (err) {
+      // fallback
+    }
+  }
+
+  return { id: String(data.id), login: data.login, name: data.name || data.login, email };
 };
 
 /**

@@ -16,10 +16,17 @@ const {
   getAllProjects,
   createProject,
   getProjectById,
+  redeployProject,
 } = require('../controllers/project.controller');
+const { getProjectResources } = require('../controllers/resource.controller');
 
-router.get('/', getAllProjects);
-router.post('/', createProject);
-router.get('/:id', getProjectById);
+router.get('/',              getAllProjects);
+router.post('/',             createProject);
+router.get('/:id',           getProjectById);
+router.post('/:id/redeploy', redeployProject);
+
+// Phase 7: Project active deployment resource summary
+router.get('/:id/resources', getProjectResources);
 
 module.exports = router;
+

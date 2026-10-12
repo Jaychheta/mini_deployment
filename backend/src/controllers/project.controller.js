@@ -10,11 +10,14 @@
 
 const projectService = require('../services/project.service');
 
-/** GET /api/projects — returns the authenticated user's projects only */
 const getAllProjects = async (req, res, next) => {
   try {
     const projects = await projectService.findAll(req.user.id);
-    res.status(200).json({ success: true, count: projects.length, data: projects });
+    const maskedProjects = projects.map(p => {
+      const { accessPassword, ...rest } = p;
+      return { ...rest, hasAccessPassword: !!accessPassword };
+    });
+    res.status(200).json({ success: true, count: maskedProjects.length, data: maskedProjects });
   } catch (err) {
     next(err);
   }
@@ -30,7 +33,7 @@ const getAllProjects = async (req, res, next) => {
  */
 const createProject = async (req, res, next) => {
   try {
-    const { name, repositoryName, repositoryUrl, branch, githubRepositoryId } = req.body;
+    const { name, repositoryName, repositoryUrl, branch, githubRepositoryId, accessPassword } = req.body;
 
     if (!name || !repositoryName || !repositoryUrl) {
       return res.status(400).json({
@@ -45,10 +48,14 @@ const createProject = async (req, res, next) => {
       repositoryUrl,
       branch:             branch             || 'main',
       githubRepositoryId: githubRepositoryId || null,
+      accessPassword:     accessPassword     || null,
       userId:             req.user.id,  // from the JWT — authenticated user's ID
     });
 
-    res.status(201).json({ success: true, data: newProject });
+    const { accessPassword: _, ...maskedProject } = newProject;
+    maskedProject.hasAccessPassword = !!newProject.accessPassword;
+
+    res.status(201).json({ success: true, data: maskedProject });
   } catch (err) {
     next(err);
   }
@@ -69,10 +76,78 @@ const getProjectById = async (req, res, next) => {
       });
     }
 
-    res.status(200).json({ success: true, data: project });
+    const { accessPassword, ...maskedProject } = project;
+    maskedProject.hasAccessPassword = !!accessPassword;
+
+    res.status(200).json({ success: true, data: maskedProject });
   } catch (err) {
     next(err);
   }
 };
 
-module.exports = { getAllProjects, createProject, getProjectById };
+/**
+ * POST /api/projects/:id/redeploy — Redeploy latest branch commit for this project.
+ */
+const redeployProject = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    const project = await projectService.findById(id, userId);
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found.',
+      });
+    }
+
+    const deploymentService = require('../services/deployment.service');
+    const pipelineService   = require('../services/pipeline.service');
+    const dockerService     = require('../services/docker.service');
+
+    const isLocked = deploymentService.isProjectLocked(id);
+    const isBuilding = await deploymentService.hasBuildingDeployment(id);
+    if (isLocked || isBuilding) {
+      return res.status(409).json({
+        success: false,
+        message: 'A deployment or rollback is already in progress for this project.',
+      });
+    }
+
+    const dockerAvailable = await dockerService.checkDockerAvailable();
+    if (!dockerAvailable) {
+      return res.status(503).json({
+        success: false,
+        message: 'Docker is not available. Please start Docker Desktop and try again.',
+      });
+    }
+
+    deploymentService.acquireProjectLock(id);
+
+    const newDeployment = await deploymentService.create({
+      projectId: id,
+      source: 'REDEPLOY',
+    });
+
+    res.status(202).json({
+      success: true,
+      message: 'Redeployment started for project.',
+      data: {
+        deploymentId: newDeployment.id,
+      },
+    });
+
+    pipelineService.runDeploymentPipeline(newDeployment.id, id, userId, {
+      isRedeploy: true,
+      source: 'REDEPLOY',
+    }).catch((err) => {
+      console.error('[PROJECT_REDEPLOY] Unhandled error:', err);
+      deploymentService.releaseProjectLock(id);
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getAllProjects, createProject, getProjectById, redeployProject };

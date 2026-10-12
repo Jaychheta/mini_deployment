@@ -15,7 +15,12 @@ import { useParams, Link } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import Navbar from '../components/Navbar';
 import StatusBadge from '../components/StatusBadge';
-import { apiGet } from '../api/api';
+import TriggerBadge from '../components/TriggerBadge';
+import ResourceDashboard from '../components/ResourceDashboard';
+import ResourceHistoryCharts from '../components/ResourceHistoryCharts';
+import RollbackModal from '../components/RollbackModal';
+import { apiGet, apiPost, apiDelete } from '../api/api';
+import { useNavigate } from 'react-router-dom';
 
 const BACKEND_URL = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace('/api', '')
@@ -30,10 +35,58 @@ export default function DeploymentPage() {
   const [error,      setError]      = useState('');
   const [socketConnected, setSocketConnected] = useState(false);
   const [liveLogs,   setLiveLogs]   = useState([]);
+  const [copied,     setCopied]     = useState(false);
+  const [deleting,   setDeleting]   = useState(false);
+  const [redeploying, setRedeploying] = useState(false);
+  const [actionError, setActionError] = useState('');
+
+  // Rollback Modal State
+  const [rollbackModalOpen, setRollbackModalOpen] = useState(false);
+  const [rollbackLoading,   setRollbackLoading]   = useState(false);
+  const [rollbackError,     setRollbackError]     = useState('');
+
+  // Phase 7: Resource Monitoring & History State
+  const [resources,     setResources]     = useState(null);
+  const [resLoading,    setResLoading]    = useState(true);
+  const [resError,      setResError]      = useState('');
+  const [history,       setHistory]       = useState([]);
+  const [histLoading,   setHistLoading]   = useState(false);
+  const [histError,     setHistError]     = useState('');
+  const [historyPeriod, setHistoryPeriod] = useState('1h');
+
+  const navigate = useNavigate();
+
+  const handleRedeploy = async () => {
+    if (redeploying) return;
+    setRedeploying(true);
+    setActionError('');
+    try {
+      const res = await apiPost(`/deployments/${id}/redeploy`);
+      navigate(`/deployments/${res.data.deploymentId}`);
+    } catch (err) {
+      setActionError(`Redeploy failed: ${err.message}`);
+      setRedeploying(false);
+    }
+  };
+
+  const handleConfirmRollback = async () => {
+    setRollbackLoading(true);
+    setRollbackError('');
+    try {
+      const res = await apiPost(`/deployments/${id}/rollback`);
+      setRollbackModalOpen(false);
+      navigate(`/deployments/${res.data.deploymentId}`);
+    } catch (err) {
+      setRollbackError(err.message);
+    } finally {
+      setRollbackLoading(false);
+    }
+  };
 
   const pollRef     = useRef(null);
   const socketRef   = useRef(null);
   const logBodyRef  = useRef(null);
+
 
   const fetchDeployment = useCallback(async () => {
     try {
@@ -51,6 +104,30 @@ export default function DeploymentPage() {
     }
   }, [id]);
 
+  const fetchResources = useCallback(async () => {
+    try {
+      const res = await apiGet(`/deployments/${id}/resources`);
+      setResources(res.data);
+    } catch (err) {
+      setResError(err.message);
+    } finally {
+      setResLoading(false);
+    }
+  }, [id]);
+
+  const fetchHistory = useCallback(async (p) => {
+    setHistLoading(true);
+    setHistError('');
+    try {
+      const res = await apiGet(`/deployments/${id}/resources/history?period=${p}`);
+      setHistory(res.data || []);
+    } catch (err) {
+      setHistError(err.message);
+    } finally {
+      setHistLoading(false);
+    }
+  }, [id]);
+
   // Auto-scroll log terminal to bottom
   useEffect(() => {
     if (logBodyRef.current) {
@@ -61,7 +138,9 @@ export default function DeploymentPage() {
   // 1. Initial REST API load
   useEffect(() => {
     fetchDeployment();
-  }, [fetchDeployment]);
+    fetchResources();
+    fetchHistory(historyPeriod);
+  }, [fetchDeployment, fetchResources, fetchHistory, historyPeriod]);
 
   // 2. Socket.IO Real-Time Connection
   useEffect(() => {
@@ -110,7 +189,11 @@ export default function DeploymentPage() {
           status: 'LIVE',
           containerPort: data.containerPort || prev.containerPort,
           containerId: data.containerId || prev.containerId,
+          deploymentUrl: data.deploymentUrl || prev.deploymentUrl,
+          hostname: data.hostname || prev.hostname,
         } : prev);
+        // Refresh resources on complete
+        fetchResources();
       }
     });
 
@@ -120,13 +203,47 @@ export default function DeploymentPage() {
       }
     });
 
+    // Phase 7: Real-Time Resource Updates over Socket.IO
+    socket.on('resources:update', (data) => {
+      if (data.deploymentId === id) {
+        setResources(data);
+        setHistory((prev) => {
+          if (!data.sampledAt) return prev;
+          if (prev.length > 0 && prev[prev.length - 1].recordedAt === data.sampledAt) {
+            return prev;
+          }
+          return [
+            ...prev.slice(-499),
+            {
+              id: `rt-${Date.now()}`,
+              cpuPercent: data.cpuPercent,
+              memoryUsedMb: data.memoryUsedMb,
+              memoryLimitMb: data.memoryLimitMb,
+              memoryPercent: data.memoryPercent,
+              networkRxBytes: data.networkRxBytes,
+              networkTxBytes: data.networkTxBytes,
+              containerState: data.containerState,
+              recordedAt: data.sampledAt,
+            },
+          ];
+        });
+      }
+    });
+
+    socket.on('resources:error', (data) => {
+      if (data.deploymentId === id) {
+        setResError(data.error);
+      }
+    });
+
     return () => {
       if (socketRef.current) {
         socketRef.current.emit('deployment:leave', { deploymentId: id });
         socketRef.current.disconnect();
       }
     };
-  }, [id]);
+  }, [id, fetchResources]);
+
 
   // 3. Fallback REST Polling while BUILDING (in case socket drops)
   useEffect(() => {
@@ -150,6 +267,24 @@ export default function DeploymentPage() {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
   }, [deployment?.status, socketConnected, fetchDeployment]);
+
+  const handleCopyUrl = (url) => {
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm('Are you sure you want to delete this deployment? This will stop its container permanently.')) return;
+    setDeleting(true);
+    try {
+      await apiDelete(`/deployments/${id}`);
+      navigate('/deployments');
+    } catch (err) {
+      alert(err.message || 'Failed to delete deployment');
+      setDeleting(false);
+    }
+  };
 
   if (loading) return (
     <div>
@@ -209,7 +344,77 @@ export default function DeploymentPage() {
               )}
             </div>
           </div>
+
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            {deployment.isActive && (
+              <span style={{
+                fontSize: '0.75rem',
+                padding: '3px 8px',
+                borderRadius: 4,
+                backgroundColor: '#22c55e',
+                color: '#fff',
+                fontWeight: 700,
+              }}>
+                ⭐ ACTIVE PRODUCTION
+              </span>
+            )}
+
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={handleRedeploy}
+              disabled={redeploying || isBuilding}
+              title="Redeploy this commit in a fresh container"
+            >
+              {redeploying ? 'Starting…' : '🔄 Redeploy'}
+            </button>
+
+            {isLive && !deployment.isActive && (
+              <button
+                className="btn btn-primary btn-sm"
+                style={{ backgroundColor: '#4f46e5' }}
+                onClick={() => { setRollbackError(''); setRollbackModalOpen(true); }}
+                disabled={redeploying || isBuilding}
+                title="Safely restore this version with zero downtime"
+              >
+                ⏪ Rollback to this version
+              </button>
+            )}
+
+            {isLive && deployment.deploymentUrl && (
+              <>
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => handleCopyUrl(deployment.deploymentUrl)}
+                >
+                  {copied ? '✓ Copied' : 'Copy URL'}
+                </button>
+                <a
+                  href={deployment.deploymentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-primary btn-sm"
+                >
+                  Open App ↗
+                </a>
+              </>
+            )}
+
+            <button
+              className="btn btn-outline btn-sm"
+              style={{ borderColor: '#ef4444', color: '#ef4444' }}
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting...' : '🗑️ Delete'}
+            </button>
+          </div>
         </div>
+
+        {actionError && (
+          <div className="alert alert-error" style={{ marginBottom: 16 }}>
+            {actionError}
+          </div>
+        )}
 
         {/* Success banner */}
         {isLive && (
@@ -218,20 +423,27 @@ export default function DeploymentPage() {
             border: '1px solid #bbf7d0',
             color: '#15803d',
             borderRadius: 8,
-            padding: '12px 16px',
-            marginBottom: 16,
-            fontSize: '0.875rem',
+            padding: '16px',
+            marginBottom: 20,
+            fontSize: '0.9rem',
           }}>
-            ✅ Deployment is LIVE on port <strong>{deployment.containerPort}</strong>
-            {' — '}
-            <a
-              href={`http://localhost:${deployment.containerPort}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: '#15803d', textDecoration: 'underline', fontWeight: 600 }}
-            >
-              http://localhost:{deployment.containerPort}
-            </a>
+            <div className="flex-between" style={{ flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <strong>✅ Deployment is LIVE and routed!</strong>
+                <div style={{ marginTop: 4 }}>
+                  URL:{' '}
+                  <a
+                    href={deployment.deploymentUrl || `http://localhost:${deployment.containerPort}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-mono"
+                    style={{ color: '#15803d', textDecoration: 'underline', fontWeight: 600 }}
+                  >
+                    {deployment.deploymentUrl || `http://localhost:${deployment.containerPort}`}
+                  </a>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -251,8 +463,16 @@ export default function DeploymentPage() {
               {[
                 ['Deployment ID', <span className="text-mono" key="id">#{deployment.id.slice(0, 8)}</span>],
                 ['Status',        <StatusBadge status={deployment.status} key="status" />],
-                ['Source',        <span key="src" style={{ fontWeight: 600 }}>{formatSource(deployment.deploymentSource)}</span>],
+                ['Live Status',   deployment.isActive ? <span key="live" style={{ color: '#15803d', fontWeight: 600 }}>Active Production Route</span> : <span key="live" style={{ color: '#64748b' }}>Historical Version</span>],
+                ['Deployment URL', deployment.deploymentUrl ? (
+                  <a href={deployment.deploymentUrl} target="_blank" rel="noopener noreferrer" className="text-mono" key="url" style={{ color: 'var(--primary, #2563eb)' }}>
+                    {deployment.deploymentUrl}
+                  </a>
+                ) : '—'],
+                ['Trigger Source', <TriggerBadge source={deployment.deploymentSource} key="src" />],
                 ['Commit',        <span className="text-mono" key="commit">{deployment.commitHash ? deployment.commitHash.slice(0, 7) : '—'}</span>],
+                ['Commit Message', deployment.commitMessage ? <span key="msg" style={{ fontStyle: 'italic', color: '#334155' }}>"{deployment.commitMessage}"</span> : '—'],
+                ['Duration',      deployment.durationSeconds != null ? <span key="dur" className="text-mono">{deployment.durationSeconds}s</span> : '—'],
                 ['Container ID',  <span className="text-mono" key="cid">{deployment.containerId ? deployment.containerId.slice(0, 12) : '—'}</span>],
                 ['Host Port',     <span className="text-mono" key="port">{deployment.containerPort || '—'}</span>],
                 ['Started',       new Date(deployment.createdAt).toLocaleString()],
@@ -271,8 +491,29 @@ export default function DeploymentPage() {
           </table>
         </div>
 
+        {/* Phase 7: Container Resource Monitoring Dashboard */}
+        <ResourceDashboard
+          resources={resources}
+          loading={resLoading}
+          error={resError}
+          isLiveSocket={socketConnected}
+        />
+
+        {/* Phase 7: Historical Resource Charts */}
+        <ResourceHistoryCharts
+          history={history}
+          loading={histLoading}
+          error={histError}
+          period={historyPeriod}
+          onPeriodChange={(newPeriod) => {
+            setHistoryPeriod(newPeriod);
+            fetchHistory(newPeriod);
+          }}
+        />
+
         {/* Build log terminal */}
         <div className="section-title flex-between">
+
           <span>Live Build Logs</span>
           <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
             {socketConnected ? '🟢 Connected via Socket.IO' : '🟡 REST Fallback'}
@@ -326,6 +567,16 @@ export default function DeploymentPage() {
             )}
           </div>
         </div>
+
+        {/* Safe Rollback Confirmation Modal */}
+        <RollbackModal
+          isOpen={rollbackModalOpen}
+          targetDeployment={deployment}
+          onClose={() => setRollbackModalOpen(false)}
+          onConfirm={handleConfirmRollback}
+          loading={rollbackLoading}
+          error={rollbackError}
+        />
       </div>
     </div>
   );

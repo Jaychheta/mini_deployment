@@ -12,15 +12,19 @@
 
 const express = require('express');
 const router  = express.Router();
-const { getStats, getUsers, getProjects, getDeployments } = require('../controllers/admin.controller');
+const { getStats, getUsers, getProjects, getDeployments, triggerAdminCleanup } = require('../controllers/admin.controller');
+const { getAdminResourceSummary } = require('../controllers/resource.controller');
 const { requireAdmin } = require('../middleware/auth.middleware');
 
 // Apply requireAdmin to every route in this router
 router.use(requireAdmin);
 
-router.get('/stats',       getStats);
-router.get('/users',       getUsers);
-router.get('/projects',    getProjects);
-router.get('/deployments', getDeployments);
+router.get('/stats',             getStats);
+router.get('/users',             getUsers);
+router.get('/projects',          getProjects);
+router.get('/deployments',       getDeployments);
+router.get('/resources/summary', getAdminResourceSummary);
+router.post('/cleanup',          triggerAdminCleanup);
 
 module.exports = router;
+

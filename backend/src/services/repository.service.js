@@ -33,7 +33,7 @@ const isValidBranch = (branch) => {
 
 // ─── Git clone ────────────────────────────────────────────────────────────────
 
-const cloneRepository = async ({ deploymentId, repositoryUrl, branch, accessToken, onLog }) => {
+const cloneRepository = async ({ deploymentId, repositoryUrl, branch, accessToken, onLog, targetCommitSha = null }) => {
   if (!isValidGithubUrl(repositoryUrl)) {
     throw new Error(`Invalid GitHub repository URL: ${repositoryUrl}`);
   }
@@ -54,13 +54,10 @@ const cloneRepository = async ({ deploymentId, repositoryUrl, branch, accessToke
 
   onLog(`[INFO] Cloning repository: ${repositoryUrl} (branch: ${branch})`);
 
-  const args = [
-    'clone',
-    '--depth', '1',
-    '--branch', branch,
-    cloneUrl,
-    '.',
-  ];
+  // If targeting an exact commit, clone without single-depth so commit is reachable
+  const args = targetCommitSha
+    ? ['clone', cloneUrl, '.']
+    : ['clone', '--depth', '1', '--branch', branch, cloneUrl, '.'];
 
   await new Promise((resolve, reject) => {
     const proc = spawn('git', args, {
@@ -98,8 +95,51 @@ const cloneRepository = async ({ deploymentId, repositoryUrl, branch, accessToke
     });
   });
 
+  if (targetCommitSha) {
+    onLog(`[INFO] Checking out target commit ${targetCommitSha.slice(0, 7)}...`);
+    await new Promise((resolve, reject) => {
+      const checkoutProc = spawn('git', ['checkout', targetCommitSha], {
+        cwd:   workspacePath,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+      });
+
+      checkoutProc.stderr.on('data', (d) => {
+        const line = d.toString().trim();
+        if (line) onLog(`[GIT] ${line}`);
+      });
+
+      checkoutProc.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`Failed to checkout target commit ${targetCommitSha}`));
+      });
+      checkoutProc.on('error', reject);
+    });
+  }
+
   onLog(`[INFO] Repository cloned successfully.`);
   return workspacePath;
+};
+
+const getWorkspaceCommitInfo = async (workspacePath) => {
+  return new Promise((resolve) => {
+    const proc = spawn('git', ['log', '-1', '--pretty=%H%x00%s'], {
+      cwd: workspacePath,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false,
+    });
+    let out = '';
+    proc.stdout.on('data', (d) => { out += d.toString(); });
+    proc.on('close', (code) => {
+      if (code === 0 && out.trim()) {
+        const [sha, message] = out.trim().split('\0');
+        resolve({ sha: sha || null, message: message || null });
+      } else {
+        resolve({ sha: null, message: null });
+      }
+    });
+    proc.on('error', () => resolve({ sha: null, message: null }));
+  });
 };
 
 // ─── Recursive File Search ───────────────────────────────────────────────────
@@ -352,5 +392,6 @@ module.exports = {
   cloneRepository,
   detectAndPrepareProject,
   cleanupWorkspace,
+  getWorkspaceCommitInfo,
   WORKSPACE_BASE,
 };

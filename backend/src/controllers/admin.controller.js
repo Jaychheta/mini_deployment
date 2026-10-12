@@ -59,15 +59,30 @@ const getProjects = async (req, res, next) => {
   }
 };
 
-/** GET /api/admin/deployments — enriched with project name + owner name */
+/** GET /api/admin/deployments — enriched with project name + owner name and filter support */
 const getDeployments = async (req, res, next) => {
   try {
-    // findAllAdmin() returns deployments already joined with project + user data
-    const deployments = await deploymentService.findAllAdmin();
+    const { status, source } = req.query;
+    const deployments = await deploymentService.findAllAdmin({ status, source });
     res.status(200).json({ success: true, count: deployments.length, data: deployments });
   } catch (err) {
     next(err);
   }
 };
 
-module.exports = { getStats, getUsers, getProjects, getDeployments };
+/** POST /api/admin/cleanup — Trigger safe container retention cleanup across all projects */
+const triggerAdminCleanup = async (req, res, next) => {
+  try {
+    const result = await deploymentService.safeCleanupContainers(null, 2);
+    res.status(200).json({
+      success: true,
+      message: `Admin safe cleanup finished. Retired: ${result.removedContainers.length}, Preserved: ${result.preservedContainers.length}`,
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getStats, getUsers, getProjects, getDeployments, triggerAdminCleanup };
+

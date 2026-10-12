@@ -9,11 +9,8 @@ build/
 .next/
 
 # Environment variables — NEVER commit .env files
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env*
+!.env.example
 
 # Logs
 logs/
@@ -36,8 +33,13 @@ Thumbs.db
 docker/volumes/
 postgres-data/
 
-# Phase 4 Deployment Workspaces
+# Deployment Workspaces & Generated Artifacts
 deployments/
+nginx/generated/
+
+# Scratch & Cloudways helper scripts with server credentials
+*cloudways*.js
+upload_dist.js
 
 # Coverage
 coverage/

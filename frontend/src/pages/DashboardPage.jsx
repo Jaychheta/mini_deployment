@@ -106,7 +106,7 @@ export default function DashboardPage() {
     }
   };
 
-  const liveCount = projects.filter((p) => p.status === 'LIVE').length;
+  const liveCount = projects.filter((p) => p.activeDeploymentStatus === 'LIVE').length;
 
   return (
     <div>
@@ -170,7 +170,7 @@ export default function DashboardPage() {
                   disabled={disconnecting}
                   style={{ color: 'var(--text-muted)' }}
                 >
-                  {disconnecting ? 'Disconnecting...' : 'Disconnect'}
+                  {disconnecting ? 'Disconnecting...' : '🔄 Switch GitHub Account'}
                 </button>
               </>
             ) : (
@@ -219,12 +219,30 @@ export default function DashboardPage() {
               projects.slice(0, 5).map((p) => (
                 <div className="project-row" key={p.id}>
                   <div className="project-row-info">
-                    <div className="project-row-name">{p.name}</div>
-                    <div className="project-row-repo">
-                      {p.repositoryUrl || p.repositoryName}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div className="project-row-name">{p.name}</div>
+                      {p.activeDeploymentStatus === 'LIVE' && (
+                        <span style={{ fontSize: '0.75rem', background: '#dcfce7', color: '#15803d', padding: '2px 8px', borderRadius: 12, fontWeight: 600 }}>
+                          🟢 Live
+                        </span>
+                      )}
+                    </div>
+                    <div className="project-row-repo" style={{ marginTop: 2 }}>
+                      {p.deploymentUrl ? (
+                        <a href={p.deploymentUrl} target="_blank" rel="noopener noreferrer" className="text-mono" style={{ color: 'var(--primary, #2563eb)' }}>
+                          {p.deploymentUrl}
+                        </a>
+                      ) : (
+                        p.repositoryUrl || p.repositoryName
+                      )}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {p.deploymentUrl && (
+                      <a href={p.deploymentUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm">
+                        Open ↗
+                      </a>
+                    )}
                     <Link to={`/projects/${p.id}`} className="btn btn-ghost btn-sm">
                       View
                     </Link>

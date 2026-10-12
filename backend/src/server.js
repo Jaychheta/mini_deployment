@@ -17,6 +17,7 @@ const morgan  = require('morgan');
 const { initDatabase }         = require('./db/init');
 const { checkDockerAvailable } = require('./services/docker.service');
 const { initSocketServer }     = require('./services/socket.service');
+const resourceMonitorService   = require('./services/resourceMonitorService');
 
 const healthRoutes     = require('./routes/health.routes');
 const authRoutes       = require('./routes/auth.routes');
@@ -25,6 +26,7 @@ const deploymentRoutes = require('./routes/deployment.routes');
 const adminRoutes      = require('./routes/admin.routes');
 const githubRoutes     = require('./routes/github.routes');
 const webhookRoutes    = require('./routes/webhook.routes');
+const proxyRoutes      = require('./routes/proxy.routes');
 
 const { requireAuth }            = require('./middleware/auth.middleware');
 const { notFound, errorHandler } = require('./middleware/error.middleware');
@@ -61,6 +63,9 @@ app.use('/api', healthRoutes);
 // Public — GitHub webhooks (signature verified inside webhook.controller.js)
 app.use('/api/webhooks', webhookRoutes);
 
+// Public — App Proxy
+app.use('/app', proxyRoutes);
+
 // Public — authentication endpoints
 app.use('/api/auth', authRoutes);
 
@@ -90,13 +95,15 @@ const start = async () => {
   const dockerAvailable = await checkDockerAvailable();
   if (dockerAvailable) {
     console.log('   ✔  Docker daemon is accessible');
+    resourceMonitorService.startMonitoring();
+    console.log('   ✔  Resource monitoring service active');
   } else {
     console.warn('   ⚠️  Docker daemon is NOT accessible.');
     console.warn('      Start Docker Desktop to enable deployments.');
   }
 
   server.listen(PORT, () => {
-    console.log(`\n✅  Backend running with Socket.IO & Webhook support`);
+    console.log(`\n✅  Backend running with Socket.IO, Webhooks & Resource Monitoring`);
     console.log(`   Environment : ${process.env.NODE_ENV || 'development'}`);
     console.log(`   API Base    : http://localhost:${PORT}/api`);
     console.log(`   Webhooks    : http://localhost:${PORT}/api/webhooks/github`);

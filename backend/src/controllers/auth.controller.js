@@ -10,6 +10,18 @@
  */
 
 const authService = require('../services/auth.service');
+const githubService = require('../services/github.service');
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
+
+/** GET /api/auth/github — start GitHub OAuth for login */
+const githubLogin = (req, res) => {
+  // Use a signed JWT as the OAuth state so we know it's a login flow
+  const state = jwt.sign({ action: 'login' }, JWT_SECRET, { expiresIn: '10m' });
+  const authUrl = githubService.getGithubAuthUrl(state);
+  res.redirect(authUrl);
+};
 
 /** POST /api/auth/signup */
 const signup = async (req, res, next) => {
@@ -79,4 +91,4 @@ const me = async (req, res, next) => {
   }
 };
 
-module.exports = { signup, login, logout, me };
+module.exports = { signup, login, logout, me, githubLogin };

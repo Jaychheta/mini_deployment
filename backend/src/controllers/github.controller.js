@@ -15,6 +15,7 @@
  */
 
 const githubService = require('../services/github.service');
+const authService = require('../services/auth.service');
 const jwt           = require('jsonwebtoken');
 
 const JWT_SECRET   = process.env.JWT_SECRET   || 'dev-secret-change-in-production';
@@ -65,10 +66,25 @@ const callback = async (req, res) => {
   }
 
   try {
-    // Validate short-lived random OAuth state from PostgreSQL
-    const { valid, userId } = await githubService.validateAndConsumeOAuthState(state);
-    if (!valid || !userId) {
-      return res.redirect(`${FRONTEND_URL}/dashboard?error=github_invalid_state`);
+    let isLoginFlow = false;
+    try {
+      const decodedState = jwt.verify(state, JWT_SECRET);
+      if (decodedState && decodedState.action === 'login') {
+        isLoginFlow = true;
+      }
+    } catch (e) {
+      // Not a JWT, proceed with normal DB state check
+    }
+
+    let userId = null;
+
+    if (!isLoginFlow) {
+      // Validate short-lived random OAuth state from PostgreSQL
+      const { valid, userId: dbUserId } = await githubService.validateAndConsumeOAuthState(state);
+      if (!valid || !dbUserId) {
+        return res.redirect(`${FRONTEND_URL}/dashboard?error=github_invalid_state`);
+      }
+      userId = dbUserId;
     }
 
     // Exchange code for access token
@@ -77,7 +93,12 @@ const callback = async (req, res) => {
     // Fetch GitHub user profile
     const githubUser = await githubService.getGithubUser(accessToken);
 
-    // Save encrypted token to database
+    if (isLoginFlow) {
+      const { token } = await authService.githubAuth(githubUser, accessToken);
+      return res.redirect(`${FRONTEND_URL}/login?token=${token}`);
+    }
+
+    // Save encrypted token to database for normal connection flow
     await githubService.saveGithubConnection(userId, {
       githubId:       githubUser.id,
       githubUsername: githubUser.login,

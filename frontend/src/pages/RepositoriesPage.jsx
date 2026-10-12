@@ -25,6 +25,8 @@ export default function RepositoriesPage() {
   const [loading,        setLoading]        = useState(true);
   const [error,          setError]          = useState('');
   const [selecting,      setSelecting]      = useState(null);
+  const [deployRepo,     setDeployRepo]     = useState(null);
+  const [accessPassword, setAccessPassword] = useState('');
   const [disconnecting,  setDisconnecting]  = useState(false);
 
   // Manual custom repo form state
@@ -33,6 +35,7 @@ export default function RepositoriesPage() {
     name: '',
     repositoryUrl: '',
     branch: 'main',
+    accessPassword: '',
   });
   const [manualLoading, setManualLoading] = useState(false);
   const [manualError, setManualError]     = useState('');
@@ -50,16 +53,23 @@ export default function RepositoriesPage() {
     fetchRepos();
   }, []);
 
-  const handleSelect = async (repo) => {
-    setSelecting(repo.id);
+  const handleSelectClick = (repo) => {
+    setDeployRepo(repo);
+    setAccessPassword('');
+  };
+
+  const handleDeployConfirm = async () => {
+    if (!deployRepo) return;
+    setSelecting(deployRepo.id);
     setError('');
     try {
       const res = await apiPost('/projects', {
-        name:               repo.name,
-        repositoryName:     repo.name,
-        repositoryUrl:      repo.url,
-        branch:             repo.defaultBranch,
-        githubRepositoryId: String(repo.id),
+        name:               deployRepo.name,
+        repositoryName:     deployRepo.name,
+        repositoryUrl:      deployRepo.url,
+        branch:             deployRepo.defaultBranch,
+        githubRepositoryId: String(deployRepo.id),
+        accessPassword:     accessPassword || null,
       });
       navigate(`/projects/${res.data.id}`);
     } catch (err) {
@@ -84,6 +94,7 @@ export default function RepositoriesPage() {
         repositoryUrl:      manualForm.repositoryUrl.trim(),
         branch:             manualForm.branch.trim() || 'main',
         githubRepositoryId: null,
+        accessPassword:     manualForm.accessPassword || null,
       });
       navigate(`/projects/${res.data.id}`);
     } catch (err) {
@@ -150,7 +161,7 @@ export default function RepositoriesPage() {
           </div>
         </div>
 
-        {error && <div className="alert alert-error">{error}</div>}
+        {error && repos.length > 0 && <div className="alert alert-error">{error}</div>}
 
         {/* Manual Repository Entry Card */}
         {showManual ? (
@@ -198,6 +209,18 @@ export default function RepositoriesPage() {
                   placeholder="main"
                   value={manualForm.branch}
                   onChange={(e) => setManualForm({ ...manualForm, branch: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 24 }}>
+                <label className="form-label" htmlFor="manual-password">Live URL Password (Optional)</label>
+                <input
+                  id="manual-password"
+                  type="password"
+                  className="form-input"
+                  placeholder="Enter a password to protect the Live URL"
+                  value={manualForm.accessPassword}
+                  onChange={(e) => setManualForm({ ...manualForm, accessPassword: e.target.value })}
                 />
               </div>
 
@@ -249,12 +272,17 @@ export default function RepositoriesPage() {
               ) : error && repos.length === 0 ? (
                 <div className="empty-state">
                   <div className="empty-state-icon">🔗</div>
-                  <div className="empty-state-text">
-                    GitHub is not connected or session expired.
+                  <div className="empty-state-text" style={{ color: 'var(--text)', fontWeight: 600 }}>
+                    {error.toLowerCase().includes('credentials') || error.toLowerCase().includes('token')
+                      ? 'Your GitHub token has expired or is invalid.'
+                      : 'GitHub is not connected or session expired.'}
                   </div>
+                  <p className="text-muted text-small" style={{ marginTop: 4 }}>
+                    Please reconnect your GitHub account to refresh permissions, or enter a manual Git URL.
+                  </p>
                   <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
                     <button className="btn btn-primary" onClick={handleConnectGitHub}>
-                      Connect GitHub Account
+                      🔑 Reconnect GitHub Account
                     </button>
                     <button className="btn btn-outline" onClick={() => setShowManual(true)}>
                       Enter Manual Git URL
@@ -307,21 +335,48 @@ export default function RepositoriesPage() {
                       )}
                     </div>
 
-                    <button
-                      id={`select-repo-${repo.id}`}
-                      className="btn btn-primary btn-sm"
-                      onClick={() => handleSelect(repo)}
-                      disabled={selecting !== null}
-                    >
-                      {selecting === repo.id ? (
-                        <>
-                          <span className="spinner" style={{ width: 12, height: 12, borderTopColor: 'white' }} />
-                          Creating...
-                        </>
-                      ) : (
-                        'Select'
-                      )}
-                    </button>
+                    {deployRepo && deployRepo.id === repo.id ? (
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <input
+                          type="password"
+                          className="form-input"
+                          placeholder="Live URL Password (Optional)"
+                          value={accessPassword}
+                          onChange={(e) => setAccessPassword(e.target.value)}
+                          style={{ padding: '4px 8px', fontSize: '0.8rem', width: 200 }}
+                        />
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={handleDeployConfirm}
+                          disabled={selecting === repo.id}
+                        >
+                          {selecting === repo.id ? 'Creating...' : 'Deploy'}
+                        </button>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => setDeployRepo(null)}
+                          disabled={selecting === repo.id}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        id={`select-repo-${repo.id}`}
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleSelectClick(repo)}
+                        disabled={selecting !== null}
+                      >
+                        {selecting === repo.id ? (
+                          <>
+                            <span className="spinner" style={{ width: 12, height: 12, borderTopColor: 'white' }} />
+                            Creating...
+                          </>
+                        ) : (
+                          'Select'
+                        )}
+                      </button>
+                    )}
                   </div>
                 ))
               )}

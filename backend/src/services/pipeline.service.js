@@ -29,6 +29,8 @@ const githubService      = require('./github.service');
 const repositoryService  = require('./repository.service');
 const dockerService      = require('./docker.service');
 const socketService      = require('./socket.service');
+const nginxService       = require('./nginx.service');
+const { generateHostname } = require('../utils/slug.util');
 
 // ─── Health check config ──────────────────────────────────────────────────────
 
@@ -109,23 +111,31 @@ const performHealthCheck = async (hostPort, onLog) => {
 
 // ─── Main pipeline ────────────────────────────────────────────────────────────
 
-const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
+const runDeploymentPipeline = async (deploymentId, projectId, userId, options = {}) => {
   let workspacePath = null;
   let imageTag      = null;
   let containerId   = null;
   let hostPort      = null;
 
+  const { targetCommitSha = null, isRollback = false, isRedeploy = false } = options;
   const log = createLogAccumulator(deploymentId);
+
+  // Preserve previous live deployment in case new candidate fails
+  const previousLiveDeployment = await deploymentService.findPreviousLiveDeployment(projectId, deploymentId);
 
   const failDeployment = async (reason) => {
     log.addLine(`[ERROR] Deployment FAILED: ${reason}`);
 
+    if (previousLiveDeployment) {
+      log.addLine(`[INFO] Safe deployment protection active: Previous LIVE deployment (${previousLiveDeployment.id.slice(0, 8)}) remains ACTIVE.`);
+    }
+
     if (containerId) {
-      log.addLine(`[INFO] Cleaning up failed container...`);
+      log.addLine(`[INFO] Cleaning up failed candidate container...`);
       await dockerService.stopAndRemoveContainer(containerId);
     }
     if (imageTag) {
-      log.addLine(`[INFO] Cleaning up failed image...`);
+      log.addLine(`[INFO] Cleaning up failed candidate image...`);
       await dockerService.removeImage(imageTag);
     }
     if (workspacePath) {
@@ -137,7 +147,11 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
     await deploymentService.updateDeployment(deploymentId, {
       status: 'FAILED',
       logs:   log.getLogs(),
+      errorMessage: reason,
     });
+
+    // Release project concurrency lock
+    deploymentService.releaseProjectLock(projectId);
 
     // Emit Socket.IO error & status events
     socketService.emitDeploymentError(deploymentId, reason);
@@ -168,6 +182,14 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
     log.addLine(`[INFO] Repository: ${repositoryUrl}`);
     log.addLine(`[INFO] Branch: ${branch}`);
 
+    // Generate/verify project hostname details
+    const { deploymentSlug, hostname, deploymentUrl } = generateHostname(
+      project.name,
+      project.id
+    );
+    log.addLine(`[INFO] Target Hostname: ${hostname}`);
+    log.addLine(`[INFO] Target Deployment URL: ${deploymentUrl}`);
+
     // ── Step 3: Validate repository URL & Branch ──────────────────────────────
     if (!repositoryService.isValidGithubUrl(repositoryUrl)) {
       await failDeployment(`Invalid repository URL: ${repositoryUrl}`);
@@ -196,21 +218,25 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
     }
     log.addLine(`[INFO] Repository access verified.`);
 
-    // ── Step 6: Get latest commit SHA ─────────────────────────────────────────
-    log.addLine(`[INFO] Fetching latest commit SHA from GitHub...`);
-    let commitSha;
-    try {
-      commitSha = await githubService.getLatestCommitSha(accessToken, repositoryUrl, branch);
-      log.addLine(`[INFO] Commit: ${commitSha}`);
-
-      await pool.query(
-        `UPDATE deployments SET commit_hash = $1 WHERE id = $2`,
-        [commitSha, deploymentId]
-      );
-    } catch (err) {
-      await failDeployment(`GitHub API error: ${err.message}`);
-      return;
+    // ── Step 6: Determine Commit SHA ─────────────────────────────────────────
+    let commitSha = targetCommitSha;
+    if (!commitSha) {
+      log.addLine(`[INFO] Fetching latest commit SHA from GitHub...`);
+      try {
+        commitSha = await githubService.getLatestCommitSha(accessToken, repositoryUrl, branch);
+      } catch (err) {
+        await failDeployment(`GitHub API error: ${err.message}`);
+        return;
+      }
+    } else {
+      log.addLine(`[INFO] Targeted commit SHA for ${isRollback ? 'rollback' : 'redeploy'}: ${commitSha}`);
     }
+
+    log.addLine(`[INFO] Commit: ${commitSha}`);
+    await pool.query(
+      `UPDATE deployments SET commit_hash = $1 WHERE id = $2`,
+      [commitSha, deploymentId]
+    );
 
     // ── Step 7: Clone repository ──────────────────────────────────────────────
     log.addLine(`[INFO] Cloning repository...`);
@@ -221,7 +247,18 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
         branch,
         accessToken,
         onLog: log.addLine,
+        targetCommitSha: commitSha,
       });
+
+      // Extract commit message from cloned repository
+      const commitInfo = await repositoryService.getWorkspaceCommitInfo(workspacePath);
+      if (commitInfo.message) {
+        log.addLine(`[INFO] Commit message: ${commitInfo.message}`);
+        await pool.query(
+          `UPDATE deployments SET commit_message = $1 WHERE id = $2`,
+          [commitInfo.message, deploymentId]
+        );
+      }
     } catch (err) {
       await failDeployment(`Repository clone failed: ${err.message}`);
       return;
@@ -298,7 +335,7 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
     log.addLine(`[INFO] Waiting for application to initialize...`);
     await new Promise((r) => setTimeout(r, 3000));
 
-    // ── Step 14: Health check ─────────────────────────────────────────────────
+    // ── Step 14: Container Health Check ───────────────────────────────────────
     const healthy = await performHealthCheck(hostPort, log.addLine);
 
     if (!healthy) {
@@ -317,32 +354,87 @@ const runDeploymentPipeline = async (deploymentId, projectId, userId) => {
       return;
     }
 
-    // ── Step 15: Mark deployment LIVE ─────────────────────────────────────────
-    log.addLine(`[INFO] Application is healthy.`);
-    log.addLine(`[INFO] Deployment is LIVE at http://localhost:${hostPort}`);
-    log.addLine(`[INFO] Container ID: ${containerId.slice(0, 12)}`);
+    // ── Step 15: Phase 6 — Nginx Reverse Proxy Configuration & Validation ──────
+    log.addLine(`[INFO] Container is healthy. Configuring Nginx reverse proxy...`);
+    let nginxConfigPath = null;
+    let finalDeploymentUrl = deploymentUrl;
+
+    try {
+      log.addLine(`[INFO] Generating Nginx configuration for ${hostname} -> port ${hostPort}...`);
+      const nginxResult = await nginxService.applyNginxConfig(
+        deploymentSlug,
+        hostname,
+        hostPort,
+        project.accessPassword
+      );
+      nginxConfigPath = nginxResult.configPath;
+      if (nginxResult.reloaded) {
+        log.addLine(`[INFO] Nginx configuration validated and gracefully reloaded.`);
+      } else if (nginxResult.warning) {
+        log.addLine(`[WARN] Nginx warning: ${nginxResult.warning}`);
+        // Direct container port is 100% reliable on localhost. Only use PUBLIC_BASE_URL if explicitly configured and not an ephemeral tunnel
+        if (process.env.PUBLIC_BASE_URL && !process.env.PUBLIC_BASE_URL.includes('loca.lt')) {
+          finalDeploymentUrl = `${process.env.PUBLIC_BASE_URL}/app/${project.name}`;
+        } else {
+          finalDeploymentUrl = `http://localhost:${hostPort}`;
+        }
+        log.addLine(`[INFO] Live Deployment URL configured: ${finalDeploymentUrl}`);
+      }
+    } catch (err) {
+      log.addLine(`[ERROR] Nginx configuration or reload failed: ${err.message}`);
+      await failDeployment(`Nginx proxy configuration failed: ${err.message}`);
+      return;
+    }
+
+    // ── Step 16: Zero-Downtime Atomic Switch & Persistence ────────────────────
+    log.addLine(`[INFO] Updating project active deployment to #${deploymentId.slice(0, 8)}...`);
+
+    // Update deployment record
+    await deploymentService.updateDeployment(deploymentId, {
+      status:          'LIVE',
+      containerId,
+      containerPort:   hostPort,
+      deploymentUrl:   finalDeploymentUrl,
+      hostname,
+      nginxConfigPath,
+      logs:            log.getLogs(),
+    });
+
+    // Update project pointer
+    await projectService.setActiveDeployment(projectId, deploymentId);
+
+    log.addLine(`[INFO] Deployment is LIVE!`);
+    log.addLine(`[INFO] Access URL: ${finalDeploymentUrl}`);
 
     await log.flush();
 
-    await deploymentService.updateDeployment(deploymentId, {
-      status:        'LIVE',
-      containerId,
-      containerPort: hostPort,
-      logs:          log.getLogs(),
-    });
+    // Clean up old containers safely according to retention policy
+    try {
+      log.addLine(`[INFO] Applying safe container retention policy...`);
+      const cleanupResult = await deploymentService.safeCleanupContainers(projectId, 2);
+      if (cleanupResult.removedContainers.length > 0) {
+        log.addLine(`[INFO] Safe cleanup: Retired ${cleanupResult.removedContainers.length} old container(s).`);
+      }
+    } catch (cleanupErr) {
+      log.addLine(`[WARN] Cleanup warning: ${cleanupErr.message}`);
+    }
 
-    // Emit Socket.IO completion event
+    // Emit Socket.IO completion event with Phase 6 URL
     socketService.emitDeploymentComplete(deploymentId, {
       containerId: containerId.slice(0, 12),
       containerPort: hostPort,
+      deploymentUrl: finalDeploymentUrl,
+      hostname,
     });
     socketService.emitDeploymentStatus(deploymentId, 'LIVE');
 
-    logger.info(`[DEPLOYMENT] Deployment ${deploymentId.slice(0, 8)} is LIVE on port ${hostPort}`);
+    logger.info(`[DEPLOYMENT] Deployment ${deploymentId.slice(0, 8)} is LIVE at ${finalDeploymentUrl}`);
 
   } catch (err) {
     logger.error(`[DEPLOYMENT] Unexpected pipeline error:`, err);
     await failDeployment(`Unexpected error: ${err.message}`);
+  } finally {
+    deploymentService.releaseProjectLock(projectId);
   }
 };
 
