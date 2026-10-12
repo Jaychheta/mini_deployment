@@ -321,7 +321,7 @@ const applyNginxConfig = async (projectSlug, hostname, hostPort, accessPassword 
 const reloadNginx = async () => {
   const reloadCmd = process.platform === 'win32'
     ? `"${NGINX_BIN_PATH}" -s reload`
-    : `systemctl reload nginx || "${NGINX_BIN_PATH}" -s reload`;
+    : `sudo systemctl reload nginx || systemctl reload nginx`;
 
   try {
     await execAsync(reloadCmd);
