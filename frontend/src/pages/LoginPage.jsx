@@ -9,17 +9,17 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { apiPost } from '../api/api';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { apiGet, apiPost } from '../api/api';
 import { useAuth } from '../context/AuthContext';
 
 const BACKEND_URL = import.meta.env.VITE_API_URL
   ? import.meta.env.VITE_API_URL.replace('/api', '')
-  : 'http://localhost:3001';
+  : '';
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const { login, setToken } = useAuth();
+  const { login } = useAuth();
   const [searchParams] = useSearchParams();
 
   const [form,    setForm]    = useState({ email: '', password: '' });
@@ -30,18 +30,12 @@ export default function LoginPage() {
     const token = searchParams.get('token');
     const githubError = searchParams.get('error');
     if (token) {
-      api.setToken(token);
-      localStorage.setItem('auth_token', token);
       localStorage.setItem('token', token);
-      if (setToken) setToken(token);
 
-      api.get('/auth/me')
+      apiGet('/auth/me')
         .then((res) => {
-          if (res.data?.data?.user) {
-            login(res.data.data.user, token);
-          } else if (res.data?.user) {
-            login(res.data.user, token);
-          }
+          const user = res?.data?.user || res?.data || res?.user;
+          login({ user, token });
           navigate('/dashboard');
         })
         .catch((err) => {
@@ -51,7 +45,7 @@ export default function LoginPage() {
     } else if (githubError) {
       setError(decodeURIComponent(githubError));
     }
-  }, [searchParams, login, navigate, setToken]);
+  }, [searchParams, login, navigate]);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
